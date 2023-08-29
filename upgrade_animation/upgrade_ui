@@ -1,0 +1,170 @@
+#!/bin/sh
+
+bin="/userdata/ui"   #ui是boot_animation的重命名可执行文件
+img="/userdata/img"
+print="/userdata/img_print"
+#用于计算两个图像文件之间的差异，并将差异保存到一个差异文件中
+diff() {
+    $bin diff $img/upgrade.png $img/${1}.png $img/${1}.diff
+}
+
+#用于显示应用差异文件到升级图像文件，并可选择是否显示slash.diff
+
+show_diff() {
+    if [ $# -gt 1 ] && [ $2 -eq 1 ]; then
+        $bin $img/upgrade.png $img/$1.diff $img/slash.diff
+    else
+        $bin $img/upgrade.png $img/$1.diff
+    fi
+}
+
+#用于显示指定的图像文件
+show() {
+    $bin $img/${1}.png
+}
+
+#用于按照指定的时间间隔控制斜杠的闪烁
+step_slash() {
+    slash=1
+    timeout=$1
+    tick=$((timeout / 10))
+
+    # 毫秒 to 微秒
+    secs=$((tick / 1000))
+    msec=$((tick % 1000))
+    usec=$((msec * 1000))
+
+    for i in $(seq 1 10); do
+        for j in $(seq 1 $secs); do
+            show_diff upgrade_$i $slash
+            slash=$((1 - slash))
+            sleep 1
+        done
+
+        [ $usec -gt 0 ] && usleep $usec
+    done
+
+    # 避免最后停留在"10 10"状态
+    show_diff upgrade_10 1
+}
+
+#按照指定的时间间隔控制升级步骤的显示
+step() {
+    # 时长，单位：毫秒
+    timeout=10000
+
+    if [ $# -ge 1 ]; then
+        timeout=$1
+    fi
+
+    tick=$((timeout / 10))
+    echo "timeout: $timeout ms, tick: $tick ms"
+
+    # 间隔2秒以上才闪烁 '/'
+    if [ -f $img/slash.diff ] && [ $tick -ge 2000 ]; then
+        step_slash "$timeout"
+        return 0
+    fi
+
+    # 毫秒 to 微秒
+    tick=$((tick * 1000))
+
+    for i in $(seq 1 10); do
+        show_diff upgrade_$i 1
+        usleep 10
+        usleep $tick
+    done
+}
+
+finish(){
+    $bin exit
+    rm -r /userdata/img_fifo
+}
+
+#用于显示脚本的用法说明
+usage() {
+    cat <<END_TEXT
+
+Usage:
+    $(basename $0) {COMMAND} [PARAMETERS...]
+-----------------------------------------------
+Commands:
+
+    start|ok|error|file|logo........... show upgrade state.
+    step [timeout_ms].................. show upgrade step.
+
+END_TEXT
+}
+
+#检查命令行参数的数量，如果参数数量小于1，则显示用法说明并退出脚本
+if [ $# -lt 1 ]; then
+    usage
+    exit 1
+fi
+
+if [ ! -f $bin ]; then
+    if [ ! -f "/oem/bin/boot_animation" ]; then
+        echo "Error: $bin not found."
+        exit 1
+    fi
+
+    cp -rf /oem/bin/boot_animation $bin
+fi
+
+if [ ! -d $img ]; then
+    if [ ! -d "/oem/img" ]; then
+        echo "Error: $img not found."
+        exit 1
+    fi
+
+    cp -rf /oem/img /userdata/
+fi
+
+#检查img_print是否存在
+if [ ! -f $print ]; then
+    echo "Error: $print not found."
+    exit 1
+fi
+
+# 检查 img_print 进程是否正在执行
+if ps -ef | grep -v grep | grep -q "img_print"; then
+    echo "upgrade_ui:img_print is running"
+else
+    echo "upgrade_ui:img_print is not running,action running"
+    $print &             # 执行 img_print 
+fi
+
+#根据命令行参数的不同执行相应的操作，包括显示升级状态、
+#显示差异文件、显示完成或错误状态、显示升级步骤或显示logo
+case $1 in
+start)
+    show upgrade     #显示upgrade.png
+    ;;
+
+file)
+    
+    show_diff upgrade_file
+    ;;
+
+ok | error)
+    show upgrade_$1
+    ;;
+
+step)
+    step $2
+    ;;
+
+logo)
+    show logo
+    ;;
+
+exit)
+    $bin exit
+    ;;
+
+*)
+    usage
+    ;;
+esac
+
+
